@@ -1,0 +1,47 @@
+{
+  "schemaVersion": 1,
+  "id": "io.github.abdelzaherabdelgwad.zlaunchpad",
+  "name": "zLaunchpad",
+  "version": "0.1.0",
+  "author": "Ahmed Abdelgawad",
+  "license": "MIT",
+  "description": "Pin any directory and launch per-directory commands from the bar. Git directories also show branch and dirty state.",
+  "kinds": [
+    "bar-widget"
+  ],
+  "entryPoints": {
+    "barWidget": "Panel.qml"
+  },
+  "barWidget": {
+    "displayName": "zLaunchpad",
+    "description": "Pinned directories with a default command, extra commands, and shared presets.",
+    "category": "Development",
+    "aliases": [
+      "zlaunchpad",
+      "launchpad",
+      "dirs",
+      "projects",
+      "commands"
+    ],
+    "allowMultiple": false,
+    "defaultSection": "right",
+    "defaults": {
+      "showGitStatus": true,
+      "showPaths": true
+    },
+    "schema": [
+      {
+        "key": "showGitStatus",
+        "type": "boolean",
+        "label": "Show Git branch and clean/dirty state",
+        "defaultValue": true
+      },
+      {
+        "key": "showPaths",
+        "type": "boolean",
+        "label": "Show full directory paths",
+        "defaultValue": true
+      }
+    ]
+  }
+}

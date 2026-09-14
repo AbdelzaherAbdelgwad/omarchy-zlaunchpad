@@ -1,0 +1,61 @@
+#!/usr/bin/env bash
+# Plugin checks: manifest contract, QML syntax, and the safety invariants this
+# plugin relies on. Run from anywhere.
+set -euo pipefail
+
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+omarchy_shell="${OMARCHY_PATH:-/usr/share/omarchy}/shell"
+fail() { echo "FAIL: $1" >&2; exit 1; }
+
+# --- manifest ---------------------------------------------------------------
+jq -e '
+  .schemaVersion == 1 and
+  .id == "io.github.abdelzaherabdelgwad.zlaunchpad" and
+  (.id | startswith("omarchy.") | not) and
+  .kinds == ["bar-widget"] and
+  .entryPoints.barWidget == "Panel.qml" and
+  (.name | type == "string" and length > 0) and
+  (.version | test("^[0-9]+\\.[0-9]+\\.[0-9]+$")) and
+  (.author | type == "string" and length > 0) and
+  (.license | type == "string" and length > 0) and
+  (.description | type == "string" and length > 0)
+' "$root/manifest.json" >/dev/null || fail "manifest.json does not meet the marketplace contract"
+
+for file in Panel.qml services/DataService.qml components/ListRow.qml components/TokenBar.qml \
+  assets/icon.svg README.md LICENSE; do
+  test -f "$root/$file" || fail "missing $file"
+done
+
+# --- no symlinks (rejected by the marketplace) ------------------------------
+if find "$root" -name .git -prune -o -type l -print -quit | grep -q .; then
+  fail "plugin folder contains a symlink"
+fi
+
+# --- QML syntax -------------------------------------------------------------
+if command -v qmllint >/dev/null; then
+  if qmllint -I "$omarchy_shell" -I "$root" \
+    "$root/Panel.qml" "$root/services/DataService.qml" "$root"/components/*.qml 2>&1 |
+    grep -iE "error|syntax|expected"; then
+    fail "qmllint reported errors"
+  fi
+else
+  echo "qmllint unavailable; skipped QML syntax check" >&2
+fi
+
+# --- safety invariants ------------------------------------------------------
+grep -qF 'atomicWrites: true' "$root/services/DataService.qml" || fail "state file must be written atomically"
+grep -qF '"-c", "core.hooksPath=/dev/null"' "$root/services/DataService.qml" || fail "git must run with hooks disabled"
+grep -qF '"-c", "core.fsmonitor=false"' "$root/services/DataService.qml" || fail "git must run with fsmonitor disabled"
+grep -qF '"--type", "directory"' "$root/services/DataService.qml" || fail "search must return directories only"
+grep -qF 'Util.execArgv' "$root/Panel.qml" || fail "commands must launch through execArgv, not a shell string"
+# Directory paths and token values must never be interpolated into script text.
+grep -qF 'LP_NAME=$1' "$root/Panel.qml" || fail "placeholders must expand to positional arguments"
+
+# --- official validation ----------------------------------------------------
+if command -v omarchy >/dev/null 2>&1; then
+  omarchy plugin validate "$root"
+else
+  echo "omarchy unavailable; skipped official plugin validation" >&2
+fi
+
+echo "all checks passed"
