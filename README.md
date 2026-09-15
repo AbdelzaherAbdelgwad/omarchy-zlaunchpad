@@ -110,8 +110,8 @@ quotes stays one literal word — nothing is pasted into the script text.
 
 | Key | Action |
 |-----|--------|
-| `Enter` | run the selected directory's default command |
-| `1`–`9` | run that command of the selected directory |
+| `Enter` or `1` | run the selected directory's default command |
+| `2`–`9` | run that command of the selected directory (the number is shown beside it in the drawer) |
 | `j` / `k`, arrows | move the selection |
 | `Shift+J` / `Shift+K` | move the selected directory down / up |
 | `r` | refresh Git state |

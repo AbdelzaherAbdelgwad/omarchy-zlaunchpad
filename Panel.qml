@@ -205,13 +205,23 @@ Panel {
     return true
   }
 
-  // 1-9 run the nth command of the selected directory.
+  // 1 is always the default command; 2-9 are the drawer commands in order, so
+  // the number beside a command in the drawer is the key that runs it.
   function runNumberedCommand(digit) {
     var entry = data_.selectedEntry
     if (!entry) return
-    var index = digit - 1
+    if (digit === 1) {
+      root.run(entry, entry.defaultCommand.command, entry.defaultCommand.keepOpen)
+      return
+    }
+    var index = digit - 2
     if (index < 0 || index >= entry.commands.length) return
     root.run(entry, entry.commands[index].command, entry.commands[index].keepOpen)
+  }
+
+  // Key number shown next to a drawer command; "" past the ninth.
+  function commandKeyLabel(index) {
+    return index + 2 <= 9 ? String(index + 2) : ""
   }
 
   // Full fzf picker in a terminal. The selection is handed back over IPC, so
@@ -772,6 +782,7 @@ Panel {
                         anchors.right: commandActions.left
                         anchors.rightMargin: Style.space(6)
                         anchors.verticalCenter: parent.verticalCenter
+                        keyLabel: root.commandKeyLabel(index)
                         text: modelData.label
                         detail: modelData.command
                         tooltipText: modelData.command
@@ -1292,7 +1303,7 @@ Panel {
             }
             Text {
               Layout.fillWidth: true
-              text: "Enter  Run default   ·   1-9  Run command"
+              text: "Enter / 1  Run default   ·   2-9  Run command"
               color: root.muted
               font.family: root.fontFamily
               font.pixelSize: Style.font.caption

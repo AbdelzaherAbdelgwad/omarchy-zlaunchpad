@@ -18,6 +18,8 @@ Rectangle {
   property real fontSize: Style.font.bodySmall
   property int elideMode: Text.ElideRight
   property bool dimmed: false
+  // Number key that runs this row, shown as a small badge on the left.
+  property string keyLabel: ""
 
   signal clicked()
 
@@ -45,8 +47,21 @@ Rectangle {
   }
 
   Text {
-    id: label
+    id: keyBadge
+    visible: root.keyLabel !== ""
     anchors.left: parent.left
+    anchors.leftMargin: Style.space(10)
+    anchors.verticalCenter: parent.verticalCenter
+    textFormat: Text.PlainText
+    text: root.keyLabel
+    color: Qt.darker(root.foreground, 1.6)
+    font.family: root.fontFamily
+    font.pixelSize: Style.font.caption
+  }
+
+  Text {
+    id: label
+    anchors.left: keyBadge.visible ? keyBadge.right : parent.left
     anchors.leftMargin: Style.space(10)
     anchors.right: detailLabel.visible ? detailLabel.left : parent.right
     anchors.rightMargin: Style.space(10)
