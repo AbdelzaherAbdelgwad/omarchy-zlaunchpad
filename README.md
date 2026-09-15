@@ -112,6 +112,7 @@ quotes stays one literal word — nothing is pasted into the script text.
 |-----|--------|
 | `Enter` or `1` | run the selected directory's default command |
 | `2`–`9` | run that command of the selected directory (the number is shown beside it in the drawer) |
+| `Ctrl+1`–`Ctrl+9` | run that shared preset in the selected directory (shown as `^1`, `^2`, … in the drawer) |
 | `j` / `k`, arrows | move the selection |
 | `Shift+J` / `Shift+K` | move the selected directory down / up |
 | `r` | refresh Git state |

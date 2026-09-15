@@ -53,7 +53,7 @@ Panel {
     if (opened) {
       editingCount = 0
       data_.refreshAll()
-      Qt.callLater(function() { keyCatcher.forceActiveFocus() })
+      Qt.callLater(function() { digitCatcher.forceActiveFocus() })
     } else {
       dirField.text = ""
       data_.clearSuggestions()
@@ -224,6 +224,19 @@ Panel {
     return index + 2 <= 9 ? String(index + 2) : ""
   }
 
+  // Ctrl+1-9 run the shared presets, in the selected directory.
+  function runNumberedPreset(digit) {
+    var entry = data_.selectedEntry
+    if (!entry) return
+    var index = digit - 1
+    if (index < 0 || index >= data_.presets.length) return
+    root.run(entry, data_.presets[index].command, data_.presets[index].keepOpen)
+  }
+
+  function presetKeyLabel(index) {
+    return index + 1 <= 9 ? "^" + (index + 1) : ""
+  }
+
   // Full fzf picker in a terminal. The selection is handed back over IPC, so
   // the panel does not have to stay open while the user browses.
   function pickWithFzf() {
@@ -332,7 +345,7 @@ Panel {
     owner: root
     bar: root.bar
     open: root.opened
-    focusTarget: keyCatcher
+    focusTarget: digitCatcher
     contentWidth: popout.fittedContentWidth(Style.space(560))
     contentHeight: popout.fittedContentHeight(Math.min(content.implicitHeight, Style.space(760)))
 
@@ -347,7 +360,28 @@ Panel {
         if (text === "r") data_.refreshAll()
         else if (text === "K") data_.move(data_.selectedIndex, -1)
         else if (text === "J") data_.move(data_.selectedIndex, 1)
-        else if (text >= "1" && text <= "9") root.runNumberedCommand(parseInt(text, 10))
+      }
+
+      // Holds focus so digits arrive here first, with their modifiers intact —
+      // PanelKeyCatcher's textKey signal carries no modifier state, so Ctrl+1
+      // and 1 would be indistinguishable there. Anything else is left
+      // unaccepted and propagates up to the catcher as usual.
+      Item {
+        id: digitCatcher
+        anchors.fill: parent
+        focus: true
+        Keys.onPressed: function(event) {
+          // A QML Keys handler accepts by default, which would swallow every
+          // other key; explicitly decline so j/k, r, Esc and the rest keep
+          // propagating up to PanelKeyCatcher.
+          event.accepted = false
+          if (root.recordingKeybind || root.editingCount > 0) return
+          if (event.key < Qt.Key_1 || event.key > Qt.Key_9) return
+          var digit = event.key - Qt.Key_0
+          if (event.modifiers & Qt.ControlModifier) root.runNumberedPreset(digit)
+          else root.runNumberedCommand(digit)
+          event.accepted = true
+        }
       }
 
       // Grabs keys ahead of everything else while a chord is being recorded.
@@ -972,6 +1006,7 @@ Panel {
                         anchors.right: presetCopy.left
                         anchors.rightMargin: Style.space(6)
                         anchors.verticalCenter: parent.verticalCenter
+                        keyLabel: root.presetKeyLabel(index)
                         text: modelData.label
                         detail: modelData.command
                         tooltipText: modelData.command
@@ -1049,6 +1084,7 @@ Panel {
                 }
                 ListRow {
                   id: presetManagerRow
+                  keyLabel: root.presetKeyLabel(index)
                   anchors.left: parent.left
                   anchors.right: presetRemove.left
                   anchors.rightMargin: Style.space(6)
@@ -1200,7 +1236,7 @@ Panel {
                       data_.notice = "Press the combination to bind."
                       Qt.callLater(function() { keybindRecorder.forceActiveFocus() })
                     } else {
-                      keyCatcher.forceActiveFocus()
+                      digitCatcher.forceActiveFocus()
                     }
                   }
                 }
@@ -1292,30 +1328,29 @@ Panel {
 
           PanelSeparator { foreground: root.foreground }
 
-          RowLayout {
+          // Flow, not a row of fillWidth labels: the hints wrap onto a second
+          // line instead of overlapping when the panel is narrow.
+          Flow {
             width: parent.width
-            Text {
-              Layout.fillWidth: true
-              text: "r  Refresh"
-              color: root.muted
-              font.family: root.fontFamily
-              font.pixelSize: Style.font.caption
-            }
-            Text {
-              Layout.fillWidth: true
-              text: "Enter / 1  Run default   ·   2-9  Run command"
-              color: root.muted
-              font.family: root.fontFamily
-              font.pixelSize: Style.font.caption
-              horizontalAlignment: Text.AlignHCenter
-            }
-            Text {
-              Layout.fillWidth: true
-              text: "Shift+J/K  Move   ·   Esc  Close"
-              color: root.muted
-              font.family: root.fontFamily
-              font.pixelSize: Style.font.caption
-              horizontalAlignment: Text.AlignRight
+            spacing: Style.space(14)
+
+            Repeater {
+              model: [
+                "r  Refresh",
+                "Enter / 1  Default",
+                "2-9  Command",
+                "Ctrl+1-9  Preset",
+                "Shift+J/K  Move",
+                "Esc  Close"
+              ]
+              delegate: Text {
+                required property var modelData
+                textFormat: Text.PlainText
+                text: modelData
+                color: root.muted
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.caption
+              }
             }
           }
         }
