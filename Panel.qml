@@ -539,6 +539,18 @@ Panel {
                 onClicked: root.pinSuggestion(modelData)
               }
             }
+
+            // The search is cut off at the producer, so say so rather than
+            // implying these are all the matches on disk.
+            Text {
+              visible: data_.suggestTruncated
+              width: parent.width
+              text: "Partial results. Type more to narrow the search."
+              color: root.muted
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.caption
+              wrapMode: Text.WordWrap
+            }
           }
 
           Text {

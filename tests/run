@@ -47,6 +47,12 @@ grep -qF 'atomicWrites: true' "$root/services/DataService.qml" || fail "state fi
 grep -qF '"-c", "core.hooksPath=/dev/null"' "$root/services/DataService.qml" || fail "git must run with hooks disabled"
 grep -qF '"-c", "core.fsmonitor=false"' "$root/services/DataService.qml" || fail "git must run with fsmonitor disabled"
 grep -qF '"--type", "directory"' "$root/services/DataService.qml" || fail "search must return directories only"
+# Long-lived shell: helper output must be bounded by the producer, not trimmed
+# after a StdioCollector has already buffered the whole thing.
+grep -qF 'head -c' "$root/services/DataService.qml" || fail "helper stdout must be capped in the pipe"
+grep -qF 'timeout -k 2' "$root/services/DataService.qml" || fail "helper processes must run under a deadline"
+grep -qF 'boundedGit(entries[refreshIndex].path' "$root/services/DataService.qml" || fail "git status must run bounded"
+grep -qF 'root.boundedCommand([' "$root/services/DataService.qml" || fail "the find fallback must run bounded"
 grep -qF 'Util.execArgv' "$root/Panel.qml" || fail "commands must launch through execArgv, not a shell string"
 # Directory paths and token values must never be interpolated into script text.
 grep -qF 'LP_NAME=$1' "$root/Panel.qml" || fail "placeholders must expand to positional arguments"

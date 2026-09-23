@@ -29,6 +29,27 @@ Item {
   property bool suggestBusy: false
   property string suggestPending: ""
   property int suggestLimit: 40
+  property bool suggestTruncated: false
+
+  // Producer-side bounds. Every helper process runs under a wall-clock
+  // deadline and pipes through `head`, so a huge directory tree or oversized
+  // commit metadata is cut off inside the pipe instead of being buffered whole
+  // in this long-lived shell process. Capping the arrays afterwards would be
+  // too late: the memory is already spent by then.
+  readonly property int searchByteLimit: 262144
+  readonly property int searchRowLimit: 4000
+  readonly property int searchSeconds: 15
+  readonly property int gitByteLimit: 65536
+  readonly property int gitSeconds: 10
+
+  // Caps on anything that reaches state.json.
+  readonly property int entryLimit: 200
+  readonly property int presetLimit: 50
+  readonly property int commandLimit: 20
+  readonly property int pathLimit: 4096
+  readonly property int nameLimit: 120
+  readonly property int subjectLimit: 200
+  readonly property int stampLimit: 40
 
   readonly property string home: Quickshell.env("HOME") || ""
   readonly property string dataHome: Quickshell.env("XDG_DATA_HOME") || home + "/.local/share"
@@ -51,10 +72,48 @@ Item {
   function gitCommand(path, arguments_) {
     return [
       "git",
+      "--no-optional-locks",
       "-c", "core.hooksPath=/dev/null",
       "-c", "core.fsmonitor=false",
       "-C", path
     ].concat(arguments_)
+  }
+
+  // Wraps an argv in `timeout <secs> <argv> | head -c <bytes>`. The argv is
+  // handed to sh as positional parameters, so no path, query or branch name is
+  // ever interpolated into script text. `head` closing the pipe is what makes
+  // the producer stop early (SIGPIPE), which bounds both the enumeration and
+  // the bytes this process has to hold.
+  function boundedCommand(argv, seconds, bytes) {
+    return [
+      "sh", "-c",
+      "bytes=$1; secs=$2; shift 2; "
+        + "(set -o pipefail) 2>/dev/null && set -o pipefail; "
+        + "timeout -k 2 \"$secs\" \"$@\" | head -c \"$bytes\"",
+      "sh", String(bytes), String(seconds)
+    ].concat(argv)
+  }
+
+  function boundedGit(path, arguments_) {
+    return boundedCommand(gitCommand(path, arguments_), gitSeconds, gitByteLimit)
+  }
+
+  function timedOut(exitCode) {
+    return exitCode === 124 || exitCode === 137
+  }
+
+  // `head` may cut the stream mid-line, so the trailing partial row is dropped
+  // rather than offered as a real path. Text that ends in a newline split into
+  // a final empty element; anything else means the producer was cut short.
+  function boundedRows(text, rowLimit) {
+    var rows = String(text || "").split("\n")
+    var truncated = rows.length > 0 && rows[rows.length - 1] !== ""
+    if (truncated) rows.pop()
+    if (rows.length > rowLimit) {
+      rows = rows.slice(0, rowLimit)
+      truncated = true
+    }
+    return { rows: rows, truncated: truncated }
   }
 
   function expandHome(path) {
@@ -92,26 +151,28 @@ Item {
   function normalizedEntry(candidate) {
     if (!candidate || typeof candidate !== "object") return null
     var path = String(candidate.path || "").trim()
-    if (path === "" || path.indexOf("\n") >= 0) return null
+    if (path === "" || path.indexOf("\n") >= 0 || path.length > pathLimit) return null
     var commands = []
     if (Array.isArray(candidate.commands)) {
-      for (var i = 0; i < candidate.commands.length; i++) {
+      for (var i = 0; i < candidate.commands.length && commands.length < commandLimit; i++) {
         var command = normalizedCommand(candidate.commands[i])
         if (command) commands.push(command)
       }
     }
+    // Every string below is capped: branch names and commit subjects arrive
+    // from a repository this plugin does not control, and they are persisted.
     return {
       path: path,
-      name: String(candidate.name || path.split("/").pop() || path),
+      name: String(candidate.name || path.split("/").pop() || path).slice(0, nameLimit),
       isGit: candidate.isGit === true,
-      branch: String(candidate.branch || ""),
+      branch: String(candidate.branch || "").slice(0, nameLimit),
       dirty: candidate.dirty === true,
-      commitSubject: String(candidate.commitSubject || ""),
+      commitSubject: String(candidate.commitSubject || "").slice(0, subjectLimit),
       defaultCommand: normalizedCommand(candidate.defaultCommand)
         || { label: "Terminal", command: "", keepOpen: false },
       commands: commands,
-      checkedAt: String(candidate.checkedAt || ""),
-      addedAt: String(candidate.addedAt || new Date().toISOString())
+      checkedAt: String(candidate.checkedAt || "").slice(0, stampLimit),
+      addedAt: String(candidate.addedAt || new Date().toISOString()).slice(0, stampLimit)
     }
   }
 
@@ -126,13 +187,13 @@ Item {
       var parsed = source === "" ? { version: 1, entries: [], presets: [] } : JSON.parse(source)
       if (parsed && parsed.version === 1) {
         if (Array.isArray(parsed.entries)) {
-          for (var i = 0; i < parsed.entries.length; i++) {
+          for (var i = 0; i < parsed.entries.length && loadedEntries.length < entryLimit; i++) {
             var entry = normalizedEntry(parsed.entries[i])
             if (entry) loadedEntries.push(entry)
           }
         }
         if (Array.isArray(parsed.presets)) {
-          for (var j = 0; j < parsed.presets.length; j++) {
+          for (var j = 0; j < parsed.presets.length && loadedPresets.length < presetLimit; j++) {
             var preset = normalizedCommand(parsed.presets[j])
             if (preset) loadedPresets.push(preset)
           }
@@ -210,6 +271,7 @@ Item {
     suggestions = []
     suggestQuery = ""
     suggestPending = ""
+    suggestTruncated = false
   }
 
   function suggest(query) {
@@ -229,13 +291,13 @@ Item {
     // the leading segments are applied as a filter in applySuggestions.
     // Always rooted at $HOME: searching "/" drags in /proc and /sys, and a
     // typed "/Work/..." is almost always "~/Work/...".
-    findProcess.command = [
+    findProcess.command = boundedCommand([
       "fd", "--type", "directory", "--absolute-path", "--hidden", "--follow",
       "--max-depth", "7", "--max-results", "400",
       "--exclude", ".git", "--exclude", "node_modules", "--exclude", ".cache",
       "--exclude", ".venv", "--exclude", "target", "--exclude", ".local/share/Trash",
       fuzzyPattern(queryTail(value)), home
-    ]
+    ], searchSeconds, searchByteLimit)
     findProcess.running = true
   }
 
@@ -246,7 +308,8 @@ Item {
     var headPattern = head.length === 0 ? null
       : new RegExp(head.map(function(part) { return fuzzyPattern(part) }).join("[^\\0]*"), "i")
 
-    var rows = String(text || "").split("\n")
+    var bounded = boundedRows(text, searchRowLimit)
+    var rows = bounded.rows
     var out = []
     for (var i = 0; i < rows.length; i++) {
       var row = rows[i].trim()
@@ -273,6 +336,7 @@ Item {
       if (depth !== 0) return depth
       return a.length - b.length
     })
+    suggestTruncated = bounded.truncated || out.length > suggestLimit
     suggestions = out.slice(0, suggestLimit)
   }
 
@@ -315,6 +379,10 @@ Item {
         notice = "Directory is already pinned."
         return
       }
+    }
+    if (entries.length >= entryLimit) {
+      notice = "Pin limit reached (" + entryLimit + "). Remove a directory first."
+      return
     }
     var next = clone(entries)
     next.push(normalizedEntry({
@@ -534,7 +602,7 @@ Item {
     refreshIndex = refreshQueue[0]
     refreshQueue = refreshQueue.slice(1)
     statusProcess.output = ""
-    statusProcess.command = gitCommand(entries[refreshIndex].path,
+    statusProcess.command = boundedGit(entries[refreshIndex].path,
       ["status", "--porcelain=v2", "--branch"])
     statusProcess.running = true
   }
@@ -543,9 +611,14 @@ Item {
     var lines = String(text || "").split("\n")
     var branch = ""
     var dirty = false
+    // The porcelain headers come first, so a truncated status still carries
+    // the branch, and one dirty line is all the flag needs.
     for (var i = 0; i < lines.length; i++) {
-      if (lines[i].indexOf("# branch.head ") === 0) branch = lines[i].slice(14).trim()
-      else if (lines[i] !== "" && lines[i].charAt(0) !== "#") dirty = true
+      if (lines[i].indexOf("# branch.head ") === 0) branch = lines[i].slice(14).trim().slice(0, nameLimit)
+      else if (lines[i] !== "" && lines[i].charAt(0) !== "#") {
+        dirty = true
+        if (branch !== "") break
+      }
     }
     var resolved = branch === "(detached)" ? "detached HEAD" : branch
     var current = entries[refreshIndex]
@@ -560,7 +633,7 @@ Item {
 
   function applyLog(text) {
     var fields = String(text || "").trim().split("\u001f")
-    var subject = fields.length >= 2 ? fields[1] : ""
+    var subject = (fields.length >= 2 ? fields[1] : "").slice(0, subjectLimit)
     if (entries[refreshIndex].commitSubject !== subject) {
       var next = clone(entries)
       next[refreshIndex].commitSubject = subject
@@ -631,13 +704,14 @@ Item {
       // No fd on this machine (or it errored): fall back to find + in-process
       // filtering so search still works.
       fallbackProcess.output = ""
-      fallbackProcess.command = [
+      fallbackProcess.command = root.boundedCommand([
         "find", root.home,
         "-maxdepth", "7", "-type", "d",
         "-not", "-path", "*/.git/*",
         "-not", "-path", "*/node_modules/*",
-        "-not", "-path", "*/.cache/*"
-      ]
+        "-not", "-path", "*/.cache/*",
+        "-print"
+      ], root.searchSeconds, root.searchByteLimit)
       fallbackProcess.running = true
     }
   }
@@ -652,18 +726,23 @@ Item {
     onExited: function(exitCode) {
       if (exitCode !== 0 && String(output || "").trim() === "") {
         root.suggestions = []
+        root.suggestTruncated = false
         root.finishSuggest()
         return
       }
       var tail = new RegExp(root.fuzzyPattern(root.queryTail(root.expandHome(root.suggestQuery))), "i")
-      var rows = String(output || "").split("\n")
+      var bounded = root.boundedRows(output, root.searchRowLimit)
+      var rows = bounded.rows
       var kept = []
       for (var i = 0; i < rows.length; i++) {
         var row = rows[i].trim()
         if (row === "") continue
         if (tail.test(row.slice(row.lastIndexOf("/") + 1))) kept.push(row)
       }
-      root.applySuggestions(kept.join("\n"))
+      // A trailing newline keeps applySuggestions from re-reading the last row
+      // as a truncated one.
+      root.applySuggestions(kept.length === 0 ? "" : kept.join("\n") + "\n")
+      root.suggestTruncated = root.suggestTruncated || bounded.truncated
       root.finishSuggest()
     }
   }
@@ -716,13 +795,22 @@ Item {
         root.refreshQueue = []
         return
       }
-      if (exitCode !== 0) {
+      // Deadline fired: keep the metadata the entry already has instead of
+      // downgrading a real repository to "plain directory".
+      if (root.timedOut(exitCode)) {
+        root.notice = "Git status timed out for " + root.entries[root.refreshIndex].name + "."
+        root.beginNextRefresh()
+        return
+      }
+      // `head` ends the pipeline, so its status — not git's — is what some
+      // shells report. The branch header is the reliable repository marker.
+      if (String(output || "").indexOf("# branch.") < 0) {
         root.markPlainDirectory()
         return
       }
       root.applyStatus(output)
       logProcess.output = ""
-      logProcess.command = root.gitCommand(root.entries[root.refreshIndex].path,
+      logProcess.command = root.boundedGit(root.entries[root.refreshIndex].path,
         ["log", "-1", "--format=%H%x1f%s%x1f%cI"])
       logProcess.running = true
     }

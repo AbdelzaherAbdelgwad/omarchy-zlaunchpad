@@ -2,8 +2,8 @@
   "schemaVersion": 1,
   "id": "io.github.abdelzaherabdelgwad.zlaunchpad",
   "name": "zLaunchpad",
-  "version": "0.1.0",
-  "author": "Ahmed Abdelgawad",
+  "version": "0.1.1",
+  "author": "Abdelzaher Abdelgwad",
   "license": "MIT",
   "description": "Pin any directory and launch per-directory commands from the bar. Git directories also show branch and dirty state.",
   "kinds": [
